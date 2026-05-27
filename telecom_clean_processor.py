@@ -1,3 +1,8 @@
+# The input noisy text is taken by supervisors code(which convert voicce to sinhala text)
+# This code has 2 main part . 1st is text correction part 2nd is tect categorization part
+# For text correction part i use my own dataset created using existing transcripts.but this code cannot handle all the noisy words but give bit accuracy
+# In text categorization part , there is a problem that IS this code cannot identify adding extra GB AND Fault TA part. The reason is noisy text could not correct more accurately
+# This is first attempt
 import os
 import re
 import numpy as np
