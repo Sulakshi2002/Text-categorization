@@ -10,21 +10,19 @@ Preprocessing Steps:
     2. Unicode NFC normalization
     3. Text cleaning
     4. Sinhala word-level tokenization
-    5. Custom stopword removal
-    6. Rule-based lexical normalization
-
-Future Improvements:
-    - Levenshtein distance fuzzy matching
-
+    5. Word normalization against canonical terms
+    6. Stopword removal
 """
 
 
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
+CANONICAL_TERMS_FILE = "dictionaries/canonical_terms.txt"
 
 
 def resolve_existing_path(*relative_paths):
@@ -41,139 +39,111 @@ def resolve_existing_path(*relative_paths):
     return BASE_DIR / relative_paths[0]
 
 
-
-# ============================================================
-# Rule-Based Sinhala Word Normalization Dictionary
-# ============================================================
-
-NORMALIZATION_MAP = {
-
-    # Billing
+SHORT_WORD_WHITELIST = {
     "බිල": "බිල්පත",
-    "බිල්": "බිල්පත",
-    "බිල්එක": "බිල්පත",
-
-
-    # Payment
-    "ගෙවන්න": "ගෙවීම",
-    "ගෙවීම": "ගෙවීම",
-
-
-    # Internet / Network
-    "නෙට්": "අන්තර්ජාලය",
-    "ඉන්ටර්නෙට්": "අන්තර්ජාලය",
-    "ඉන්ටනෙට්": "අන්තර්ජාලය",
-    "නෙට්වර්ක්": "අන්තර්ජාලය",
-
-
-    # Connectivity
-    "කනෙක්ශන්": "සම්බන්ධතාව",
-    "කනෙක්ෂන්": "සම්බන්ධතාව",
-    "කනෙක්ට්": "සම්බන්ධතාව",
-    "කනෙක්ටිවිටි": "සම්බන්ධතාව",
-    "ලින්ක්": "සම්බන්ධතාව",
-
-
-    # WiFi / Router
-    "වයිෆායි": "වයිෆයි",
-    "වයිෆයි": "වයිෆයි",
-    "රවුටරේ": "රවුටර්",
-    "රවුටර්": "රවුටර්",
-
-
-    # Signal / Speed
-    "සිග්නල්": "සංඥා",
-    "ස්පීඩ්": "වේගය",
-    "ස්ලෝ": "මන්දගාමී",
-
-
-    # Technical issues
-    "ඩැමේජ්": "හානි",
-    "රිකොන්": "නැවත_සම්බන්ධ",
-    "රීකනෙට්": "නැවත_සම්බන්ධ",
-    "රීකනෙක්ෂන්": "නැවත_සම්බන්ධ",
-    "රීස්ටාර්ට්": "නැවත_ආරම්භ",
-
-
-    # Other telecom terms
-    "ඩයල්ටෝන්": "ඇමතුම්_නාදය",
-    "ෆයිබර්": "ෆයිබර්",
-    "බ්‍රෝඩ්බෑන්ඩ්": "බ්‍රෝඩ්බෑන්ඩ්",
-    "අවුට්ස්ටැන්ඩින්": "හිඟ",
-    "ඩියුඩේට්": "ගෙවිය_යුතු_දිනය"
-
+    "නෙට්": "ඉන්ටර්නෙට්",
+    "පේ": "පේමන්ට්",
+    "ඩියු": "ඩියුඩේට්",
 }
 
+SINHALA_VOWEL_MARKS = re.compile(r"[ාැෑිීුූෘෲෙේෛොෝෞ්‍්]")
+
+SKELETON_TRANSLATION = str.maketrans(
+    {
+        "ඛ": "ක",
+        "ඝ": "ක",
+        "ඟ": "ග",
+        "ඡ": "ච",
+        "ජ": "ච",
+        "ඣ": "ච",
+        "ඤ": "න",
+        "ඪ": "ට",
+        "ඩ": "ට",
+        "ඬ": "ට",
+        "ණ": "න",
+        "ථ": "ත",
+        "ධ": "ද",
+        "ඳ": "ද",
+        "බ": "ප",
+        "භ": "ප",
+        "ඵ": "ප",
+        "ශ": "ස",
+        "ෂ": "ස",
+        "ළ": "ල",
+        "ෆ": "ප",
+    }
+)
+
+PHONETIC_TRANSLATION = str.maketrans(
+    {
+        "ඛ": "ක",
+        "ඝ": "ක",
+        "ඟ": "ග",
+        "ඡ": "ච",
+        "ජ": "ජ",
+        "ඣ": "ජ",
+        "ඤ": "ඤ",
+        "ඪ": "ඩ",
+        "ඩ": "ඩ",
+        "ඬ": "ඩ",
+        "ණ": "න",
+        "ථ": "ත",
+        "ධ": "ද",
+        "ඳ": "ද",
+        "බ": "බ",
+        "භ": "බ",
+        "ඵ": "ප",
+        "ශ": "ස",
+        "ෂ": "ස",
+        "ළ": "ල",
+        "ෆ": "ෆ",
+    }
+)
 
 
-# ============================================================
-# Additional Call Centre Stopwords
-# ============================================================
+def load_canonical_terms(file_path):
 
-EXTRA_CALLCENTER_STOPWORDS = {
-
-    "අද",
-    "එක",
-    "එක්",
-    "තව",
-    "තවත්",
-    "මෙහෙම",
-    "ඔය",
-    "ඕන",
-    "ඕනෙ",
-    "ඇයි",
-
-    "දැන්",
-    "පස්සේ",
-    "පස්සෙ",
-
-    "එතකොට",
-    "මෙතන",
-    "ඔතන",
-
-    "කලින්",
-
-    "දෙන්න",
-    "ගන්න",
-    "කරලා",
-    "කරල",
-
-    "නෑ",
-    "නැහැ",
-    "නැතුව",
-
-    "පුළුවන්",
-    "බෑ",
-
-    "ඔව්",
-    "හරි",
-    "හොඳයි",
-
-    "කියලා",
-    "ගැන",
-
-    "මට",
-    "අපි",
-    "අය",
-
-    "තියෙන්නේ",
-    "තියෙනවා",
-    "නෑනේ",
-    "නේද",
-    "හිතන්නේ",
-    "වෙන්න",
-    "වෙනකොට",
-    "කරනවද",
-    "වුණාම"
-
-}
+    canonical_terms = []
+    seen = set()
 
 
+    path = resolve_existing_path(file_path)
 
 
-# ============================================================
-# Load Stopwords
-# ============================================================
+    if not path.exists():
+
+        print(f"Warning: canonical terms file not found: {path}")
+
+        return canonical_terms
+
+
+    with open(path, "r", encoding="utf-8") as file:
+
+        for line in file:
+
+            term = line.strip()
+
+
+            if not term or term.startswith("#"):
+
+                continue
+
+
+            if term not in seen:
+
+                canonical_terms.append(term)
+                seen.add(term)
+
+
+    return canonical_terms
+
+
+CANONICAL_TERMS = tuple(load_canonical_terms(CANONICAL_TERMS_FILE))
+CANONICAL_SET = set(CANONICAL_TERMS)
+SHORT_CANONICAL_TERMS = tuple(term for term in CANONICAL_TERMS if len(term) <= 3)
+MEDIUM_CANONICAL_TERMS = tuple(term for term in CANONICAL_TERMS if 4 <= len(term) <= 5)
+LONG_CANONICAL_TERMS = tuple(term for term in CANONICAL_TERMS if len(term) >= 6)
+
 
 def load_stopwords(stopword_files):
 
@@ -193,27 +163,24 @@ def load_stopwords(stopword_files):
         if not path.exists():
 
             print(f"Warning: {file} not found")
+
             continue
 
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as handle:
 
-            for word in f:
+            for word in handle:
 
                 word = word.strip()
 
+
                 if word:
+
                     stopwords.add(word)
 
 
     return stopwords
 
-
-
-
-# ============================================================
-# Load Transcript Files
-# ============================================================
 
 def load_transcripts(folder_path):
 
@@ -230,15 +197,15 @@ def load_transcripts(folder_path):
 
     for file in folder.glob("*.txt"):
 
-        with open(file, "r", encoding="utf-8") as f:
+        with open(file, "r", encoding="utf-8") as handle:
 
-            text = f.read()
+            text = handle.read()
 
 
         transcripts.append(
             {
                 "filename": file.name,
-                "text": text
+                "text": text,
             }
         )
 
@@ -246,88 +213,32 @@ def load_transcripts(folder_path):
     return transcripts
 
 
-
-
-# ============================================================
-# Text Cleaning
-# ============================================================
-
 def clean_text(text):
 
-
-    # Unicode NFC normalization
-    text = unicodedata.normalize(
-        "NFC",
-        text
-    )
-
-
-    # Convert English letters to lowercase
+    text = unicodedata.normalize("NFC", text)
     text = text.lower()
-
-
-    # Remove transcript language tags
-    text = re.sub(
-        r"\[\s*si\s*\]",
-        " ",
-        text
-    )
-
-
-    # Keep Sinhala characters only
-    text = re.sub(
-        r"[^\u0D80-\u0DFF\s]",
-        " ",
-        text
-    )
-
-
-    # Remove extra spaces
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
+    text = re.sub(r"\[\s*si\s*\]", " ", text)
+    text = re.sub(r"[^\u0D80-\u0DFF\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
-
-
-# ============================================================
-# Tokenization
-# ============================================================
-
 def tokenize(text):
+    """Sinhala word-level tokenization."""
 
-    """
-    Sinhala word-level tokenization.
+    return re.findall(r"[\u0D80-\u0DFF]+", text)
 
-    Method:
-        Whitespace-based tokenization
-    """
-
-    return text.split()
-
-
-
-
-# ============================================================
-# Stopword Removal
-# ============================================================
 
 def remove_stopwords(tokens, stopwords):
-
 
     filtered = []
 
 
     for token in tokens:
 
-
-        # Remove very short tokens
         if len(token) < 3:
+
             continue
 
 
@@ -339,137 +250,233 @@ def remove_stopwords(tokens, stopwords):
     return filtered
 
 
+@lru_cache(maxsize=None)
+def _levenshtein_distance(left, right):
+
+    if left == right:
+
+        return 0
 
 
-# ============================================================
-# Rule-Based Normalization
-# ============================================================
+    if not left:
+
+        return len(right)
+
+
+    if not right:
+
+        return len(left)
+
+
+    if len(left) < len(right):
+
+        left, right = right, left
+
+
+    previous_row = list(range(len(right) + 1))
+
+
+    for left_index, left_char in enumerate(left, start=1):
+
+        current_row = [left_index]
+
+
+        for right_index, right_char in enumerate(right, start=1):
+
+            insertion_cost = current_row[right_index - 1] + 1
+            deletion_cost = previous_row[right_index] + 1
+            substitution_cost = previous_row[right_index - 1]
+
+
+            if left_char != right_char:
+
+                substitution_cost += 1
+
+
+            current_row.append(min(insertion_cost, deletion_cost, substitution_cost))
+
+
+        previous_row = current_row
+
+
+    return previous_row[-1]
+
+
+def _normalized_similarity(left, right):
+
+    if not left and not right:
+
+        return 1.0
+
+
+    max_length = max(len(left), len(right), 1)
+
+    return 1.0 - (_levenshtein_distance(left, right) / max_length)
+
+
+@lru_cache(maxsize=None)
+def _strip_vowel_marks(token):
+
+    return SINHALA_VOWEL_MARKS.sub("", token)
+
+
+@lru_cache(maxsize=None)
+def _consonant_skeleton(token):
+
+    return _strip_vowel_marks(token).translate(SKELETON_TRANSLATION)
+
+
+@lru_cache(maxsize=None)
+def _phonetic_signature(token):
+
+    return _strip_vowel_marks(token).translate(PHONETIC_TRANSLATION)
+
+
+def _select_medium_candidate(token):
+
+    best_candidate = token
+    best_score = 0.0
+
+
+    for candidate in MEDIUM_CANONICAL_TERMS:
+
+        score = _normalized_similarity(token, candidate)
+
+
+        if score > best_score:
+
+            best_score = score
+            best_candidate = candidate
+
+
+    if best_score >= 0.75:
+        return best_candidate
+
+    return token
+
+def _select_long_candidate(token):
+
+    best_candidate = token
+    best_score = -1.0
+
+
+    for candidate in LONG_CANONICAL_TERMS:
+
+        skeleton_score = _normalized_similarity(
+            _consonant_skeleton(token),
+            _consonant_skeleton(candidate)
+        )
+        phonetic_score = _normalized_similarity(
+            _phonetic_signature(token),
+            _phonetic_signature(candidate)
+        )
+        levenshtein_score = _normalized_similarity(
+            _strip_vowel_marks(token),
+            _strip_vowel_marks(candidate)
+        )
+
+        score = (
+            0.40 * skeleton_score
+            + 0.30 * phonetic_score
+            + 0.30 * levenshtein_score
+        )
+
+
+        if score > best_score:
+
+            best_score = score
+            best_candidate = candidate
+
+
+    if best_score >= 0.72:
+        return best_candidate
+
+    return token
+
 
 def normalize_words(tokens):
-
 
     normalized = []
 
 
     for token in tokens:
 
+        if token in CANONICAL_SET:
 
-        normalized.append(
-            NORMALIZATION_MAP.get(
-                token,
-                token
+            normalized.append(token)
+
+            continue
+
+
+        if len(token) <= 3:
+
+            normalized.append(
+                SHORT_WORD_WHITELIST.get(token, token)
             )
-        )
+
+            continue
+
+
+        if 4 <= len(token) <= 5:
+
+            normalized.append(_select_medium_candidate(token))
+
+            continue
+
+
+        new_word = _select_long_candidate(token)
+
+        if token != new_word:
+            print(token, "---->", new_word)
+
+        normalized.append(new_word)
 
 
     return normalized
 
 
-
-
-# ============================================================
-# Complete Pipeline
-# ============================================================
-
 def preprocess_text(text, stopwords):
 
-
     text = clean_text(text)
-
-
     tokens = tokenize(text)
-
-
-    tokens = remove_stopwords(
-        tokens,
-        stopwords
-    )
-
-
+    tokens = remove_stopwords(tokens, stopwords)
     tokens = normalize_words(tokens)
-
+    
 
     return tokens
 
 
-
-
-
-# ============================================================
-# Testing
-# ============================================================
-
 if __name__ == "__main__":
-
 
     transcript_folder = resolve_existing_path(
         "transcripts",
         "trnascripts"
     )
 
-
     stopword_files = [
-
-        resolve_existing_path("stopwords/sinhala_stopwords.txt"),
-
-        resolve_existing_path("stopwords/callcenter_stopwords.txt")
-
+        resolve_existing_path("stopwords/sinhala_stopwords.txt")
     ]
-
 
     print("\nLoading stopwords...")
 
+    stopwords = load_stopwords(stopword_files)
 
-    stopwords = load_stopwords(
-        stopword_files
-    )
-
-
-    stopwords.update(
-        EXTRA_CALLCENTER_STOPWORDS
-    )
-
-
-    print(
-        "Total stopwords:",
-        len(stopwords)
-    )
-
-
+    print("Total stopwords:", len(stopwords))
 
     print("\nLoading transcripts...")
 
+    transcripts = load_transcripts(transcript_folder)
 
-    transcripts = load_transcripts(
-        transcript_folder
-    )
-
-
-    print(
-        "Total transcripts:",
-        len(transcripts)
-    )
-
-
+    print("Total transcripts:", len(transcripts))
 
     if transcripts:
 
-
         sample = transcripts[0]["text"]
 
-
         print("\nOriginal text:\n")
-
         print(sample[:300])
 
-
-
-        processed = preprocess_text(
-            sample,
-            stopwords
-        )
-
+        processed = preprocess_text(sample, stopwords)
 
         print("\nProcessed tokens:\n")
-
         print(processed[:50])

@@ -2,21 +2,42 @@
 Sinhala Call Centre Word Cloud Generator
 
 Purpose:
-    Generate word cloud using cleaned Sinhala tokens
+    Generate Sinhala word cloud using
+    pre-calculated word frequencies.
+
+Input:
+    outputs/word_frequency.csv
+
+Output:
+    outputs/sinhala_wordcloud.png
+
+Pipeline:
+
+word_frequency.csv
+        |
+        ↓
+Load frequencies
+        |
+        ↓
+Generate Word Cloud
+        |
+        ↓
+Save image
+
 """
 
 
 from pathlib import Path
-from collections import Counter
-
+import pandas as pd
 import matplotlib.pyplot as plt
+
 from wordcloud import WordCloud
 
-from preprocess import (
-    load_stopwords,
-    load_transcripts,
-    preprocess_text
-)
+
+
+# ============================================================
+# Configuration
+# ============================================================
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,134 +47,72 @@ def resolve_existing_path(*relative_paths):
 
     for relative_path in relative_paths:
 
-        candidate = Path(relative_path)
-
-        if not candidate.is_absolute():
-
-            candidate = BASE_DIR / candidate
+        candidate = BASE_DIR / relative_path
 
         if candidate.exists():
 
             return candidate
 
 
-    return None
+    return BASE_DIR / relative_paths[0]
 
 
-
-# ============================================================
-# Configuration
-# ============================================================
-
-TRANSCRIPT_FOLDER = BASE_DIR / "transcripts"
-
-STOPWORD_FILES = [
-
-    BASE_DIR / "stopwords/sinhala_stopwords.txt",
-
-    BASE_DIR / "stopwords/callcenter_stopwords.txt"
-
-]
-
-
-FONT_PATH = resolve_existing_path(
-    "fonts/NotoSansSinhala-Regular.ttf",
-    r"C:\Windows\Fonts\Nirmala.ttc",
-    r"C:\Windows\Fonts\DejaVuSans.ttf",
+FREQUENCY_FILE = (
+    BASE_DIR /
+    "outputs" /
+    "word_frequency.csv"
 )
 
 
-if FONT_PATH is None:
+FONT_PATH = (
+    resolve_existing_path(
+        "fonts/Noto_Sans_Sinhala/static/NotoSansSinhala_SemiCondensed-Regular.ttf",
+        "fonts/Noto_Sans_Sinhala/NotoSansSinhala-VariableFont_wdth,wght.ttf",
+        "fonts/NotoSansSinhala-Regular.ttf"
+    )
+)
 
-    raise FileNotFoundError(
-        "No usable font found. Add fonts/NotoSansSinhala-Regular.ttf or install a Sinhala-capable Windows font."
+
+OUTPUT_FILE = (
+    BASE_DIR /
+    "outputs" /
+    "sinhala_wordcloud.png"
+)
+
+
+
+# ============================================================
+# Load Word Frequencies
+# ============================================================
+
+
+def load_word_frequency(file_path):
+
+    """
+    Load word frequency CSV.
+
+    Expected format:
+
+    Word,Frequency
+
+    """
+
+
+    df = pd.read_csv(
+        file_path,
+        encoding="utf-8"
     )
 
 
-OUTPUT_FILE = BASE_DIR / "outputs" / "sinhala_wordcloud.png"
-
-
-
-# ============================================================
-# Load stopwords
-# ============================================================
-
-print("Loading stopwords...")
-
-stopwords = load_stopwords(
-    STOPWORD_FILES
-)
-
-
-print(
-    "Total stopwords:",
-    len(stopwords)
-)
-
-
-
-# ============================================================
-# Load transcripts
-# ============================================================
-
-print("\nLoading transcripts...")
-
-
-transcripts = load_transcripts(
-    TRANSCRIPT_FOLDER
-)
-
-
-print(
-    "Total transcripts:",
-    len(transcripts)
-)
-
-
-
-# ============================================================
-# Preprocess all transcripts
-# ============================================================
-
-all_tokens = []
-
-
-for transcript in transcripts:
-
-
-    tokens = preprocess_text(
-        transcript["text"],
-        stopwords
+    frequency_dict = dict(
+        zip(
+            df["Word"],
+            df["Frequency"]
+        )
     )
 
 
-    all_tokens.extend(tokens)
-
-
-
-print(
-    "\nTotal tokens after preprocessing:",
-    len(all_tokens)
-)
-
-
-
-# ============================================================
-# Word Frequency
-# ============================================================
-
-frequency = Counter(all_tokens)
-
-
-print("\nTop 20 words:")
-
-for word, count in frequency.most_common(20):
-
-    print(
-        word,
-        ":",
-        count
-    )
+    return frequency_dict
 
 
 
@@ -161,71 +120,154 @@ for word, count in frequency.most_common(20):
 # Generate Word Cloud
 # ============================================================
 
-text = " ".join(all_tokens)
+
+def generate_wordcloud(frequency_dict):
 
 
+    wordcloud = WordCloud(
 
-wordcloud = WordCloud(
+        font_path=str(FONT_PATH),
 
-    font_path=FONT_PATH,
+        width=1200,
 
-    width=1200,
+        height=800,
 
-    height=800,
+        background_color="white",
 
-    background_color="white",
+        max_words=100,
 
-    max_words=100,
+        min_font_size=10,
 
-    collocations=False
+        max_font_size=120,
 
-).generate(text)
+        prefer_horizontal=0.9,
 
-
-
-# ============================================================
-# Display
-# ============================================================
-
-
-plt.figure(
-    figsize=(12,8)
-)
+    ).generate_from_frequencies(
+        frequency_dict
+    )
 
 
-plt.imshow(
-    wordcloud,
-    interpolation="bilinear"
-)
+    return wordcloud
 
-
-plt.axis("off")
-
-
-plt.title(
-    "Sinhala Call Centre Word Cloud"
-)
-
-
-plt.show()
 
 
 
 # ============================================================
-# Save output
+# Save Visualization
 # ============================================================
 
-Path("outputs").mkdir(
-    exist_ok=True
-)
+
+def save_wordcloud(wordcloud, output_path):
 
 
-wordcloud.to_file(
-    OUTPUT_FILE
-)
+    plt.figure(
+        figsize=(12,8)
+    )
 
 
-print(
-    "\nSaved:",
-    OUTPUT_FILE
-)
+    plt.imshow(
+        wordcloud,
+        interpolation="bilinear"
+    )
+
+
+    plt.axis(
+        "off"
+    )
+
+
+    plt.tight_layout()
+
+
+    plt.savefig(
+
+        output_path,
+
+        dpi=300,
+
+        bbox_inches="tight"
+
+    )
+
+
+    plt.close()
+
+
+
+
+# ============================================================
+# Main Execution
+# ============================================================
+
+
+if __name__ == "__main__":
+
+
+    print("\nLoading word frequency...")
+
+
+    if not FREQUENCY_FILE.exists():
+
+        raise FileNotFoundError(
+
+            f"Frequency file not found: {FREQUENCY_FILE}"
+
+        )
+
+
+
+    if not FONT_PATH.exists():
+
+        raise FileNotFoundError(
+
+            f"Sinhala font not found: {FONT_PATH}"
+
+        )
+
+
+
+    frequencies = load_word_frequency(
+        FREQUENCY_FILE
+    )
+
+
+    print(
+        "Total words:",
+        len(frequencies)
+    )
+
+
+
+    print("\nGenerating word cloud...")
+
+
+    wc = generate_wordcloud(
+        frequencies
+    )
+
+
+
+    OUTPUT_FILE.parent.mkdir(
+        exist_ok=True
+    )
+
+
+
+    save_wordcloud(
+
+        wc,
+
+        OUTPUT_FILE
+
+    )
+
+
+
+    print(
+        "\nWord cloud saved:"
+    )
+
+
+    print(
+        OUTPUT_FILE
+    )
